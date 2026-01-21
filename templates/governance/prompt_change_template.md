@@ -1,0 +1,19 @@
+# Prompt Change Record
+
+DATE:
+PROMPT_ID:
+
+CHANGE:
+-
+
+REASON:
+-
+
+EXPECTED_BEHAVIOR_IMPROVEMENT:
+-
+
+OBSERVED_SCORE_CHANGE:
+-
+
+PROMOTED:
+Yes / No
