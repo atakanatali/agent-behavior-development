@@ -18,6 +18,74 @@ It defines a **development paradigm**, not an SDK.
 
 ---
 
+```mermaid
+graph TB
+
+  subgraph Planning
+    A[Product Intent or Sprint Goal]
+    B[Notlanot Sprint Plan with Personas]
+    C[Task Packets]
+    D[Conflict Inputs]
+    E[Conflict Scoring and Replan]
+  end
+
+  subgraph PromptOps
+    F[Prompt Library]
+    G[Prompt Compiler]
+    H[Guardrails]
+    I[Output Format Contract]
+  end
+
+  subgraph Execution
+    J[Agent Run]
+    K[Structured Output]
+    L[Evidence Production]
+  end
+
+  subgraph ReviewRecycle
+    M[Scorecard]
+    N[Tags and Anti Patterns]
+    O[Prompt Patch Rules]
+    P[Promote to Library]
+    Q[Recycle Outputs]
+    R[Changelog and Governance]
+  end
+
+  A --> B
+  B --> C
+  C --> D
+  D --> E
+
+  E --> G
+  F --> G
+  G --> H
+  H --> I
+  I --> J
+
+  J --> K
+  K --> L
+  K --> M
+  L --> M
+
+  M --> N
+  N --> O
+  O --> J
+  O --> P
+  P --> F
+
+  M --> Q
+  Q --> R
+  R --> B
+
+  style F fill:#9C27B0,color:#fff
+  style M fill:#FF9800,color:#fff
+  style O fill:#F44336,color:#fff
+  style L fill:#4CAF50,color:#fff
+  style I fill:#1565C0,color:#fff
+```
+
+---
+
 ## Why ABD Exists
 
 Traditional development paradigms assume:
