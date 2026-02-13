@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "agent-behavior-development"
+version = "0.1.0"
+description = "ABD: Agent Behavior Development paradigm engine — multi-agent orchestration for software development"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "Atakan Atali", email = "atakanatali6@gmail.com"},
+]
+keywords = ["agent", "llm", "orchestration", "behavior-driven", "development"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+
+dependencies = [
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "pyyaml>=6.0.0",
+    "anthropic>=0.39.0",
+    "openai>=1.50.0",
+    "litellm>=1.40.0",
+    "PyGithub>=2.1.0",
+    "transitions>=0.9.0",
+    "httpx>=0.27.0",
+    "aiofiles>=23.2.0",
+    "tenacity>=8.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.4.0",
+    "mypy>=1.8.0",
+]
+memory = [
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+orchestify = "orchestify.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/atakanatali/agent-behavior-development"
+Repository = "https://github.com/atakanatali/agent-behavior-development"
+Issues = "https://github.com/atakanatali/agent-behavior-development/issues"
+
+[tool.setuptools.packages.find]
+include = ["orchestify*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
