@@ -34,7 +34,6 @@ from orchestify.cli.commands.plan import plan
 from orchestify.cli.commands.start import start
 from orchestify.cli.commands.status import status
 from orchestify.cli.commands.inspect_cmd import inspect
-from orchestify.cli.commands.memory import memory
 from orchestify.cli.commands.stop_resume import stop, resume
 from orchestify.cli.commands.config_cmd import config
 
@@ -44,7 +43,6 @@ cli.add_command(plan)
 cli.add_command(start)
 cli.add_command(status)
 cli.add_command(inspect)
-cli.add_command(memory)
 cli.add_command(stop)
 cli.add_command(resume)
 cli.add_command(config)

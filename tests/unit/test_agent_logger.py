@@ -8,13 +8,15 @@ from orchestify.core.agent_logger import AgentLogger
 
 class TestAgentLogger:
     @pytest.fixture
-    def logger(self, tmp_path):
-        return AgentLogger(tmp_path / "logs")
+    def logger(self, sprint_db):
+        return AgentLogger(sprint_db, sprint_id="test-sprint")
 
-    def test_log_creates_file(self, logger):
+    def test_log_creates_entry(self, logger):
         logger.log("engineer", "started")
-        log_file = logger.log_dir / "engineer.log"
-        assert log_file.exists()
+        entries = logger.get_agent_logs("engineer")
+        assert len(entries) == 1
+        assert entries[0]["agent_id"] == "engineer"
+        assert entries[0]["event"] == "started"
 
     def test_log_entry_format(self, logger):
         logger.log("engineer", "code_written", {"files": ["main.py"]})

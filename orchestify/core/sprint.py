@@ -1,19 +1,20 @@
 """
 Sprint management for orchestify.
 
-Each sprint is an isolated execution context stored in .orchestify/<sprint_id>/.
-Multiple sprints can run in parallel from different terminals.
+Each sprint is an agent execution context / session — NOT a project sprint.
+It tracks "where was I, what did I last do" for agents.
+Real project sprints are tracked via GitHub issues by the architect agent.
+
+All sprint data lives in SQLite (~/.orchestify/data/orchestify.db).
+The only filesystem artifact is ~/.orchestify/artifacts/<sprint_id>/ for output files.
 """
-import json
 import os
 import random
-import string
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import yaml
+from orchestify.core.global_config import get_orchestify_home
 
 
 # Readable sprint ID components
@@ -44,48 +45,83 @@ def generate_sprint_id() -> str:
 
 
 class Sprint:
-    """Represents a single sprint execution context."""
+    """
+    Represents a single sprint (agent execution context).
 
-    def __init__(self, sprint_dir: Path):
-        self.sprint_dir = sprint_dir
-        self.sprint_id = sprint_dir.name
-        self.config_file = sprint_dir / "config.yaml"
-        self.state_file = sprint_dir / "state.json"
-        self.log_dir = sprint_dir / "logs"
-        self.artifacts_dir = sprint_dir / "artifacts"
+    Backed entirely by SQLite. The only filesystem path is artifacts_dir
+    for storing output files.
+    """
+
+    def __init__(self, sprint_id: str, db, row: Optional[Dict[str, Any]] = None):
+        """
+        Initialize a Sprint.
+
+        Args:
+            sprint_id: Unique sprint identifier
+            db: DatabaseManager instance (required)
+            row: Optional pre-loaded DB row dict (avoids extra query)
+        """
+        self.sprint_id = sprint_id
+        self._db = db
+        self._row = row
+
+        # Only physical directory — for output artifacts
+        self.artifacts_dir = get_orchestify_home() / "artifacts" / sprint_id
+
+    def _get_repo(self):
+        from orchestify.db.repositories import SprintRepository
+        return SprintRepository(self._db)
+
+    def _ensure_row(self) -> Dict[str, Any]:
+        """Load row from DB if not cached."""
+        if self._row is None:
+            repo = self._get_repo()
+            self._row = repo.get(self.sprint_id)
+        return self._row or {}
 
     @property
     def exists(self) -> bool:
-        return self.sprint_dir.exists()
+        return self._ensure_row() != {}
 
     def load_state(self) -> Dict[str, Any]:
-        """Load sprint state."""
-        if not self.state_file.exists():
-            return {"status": "created", "started_at": None, "issues": []}
-        with open(self.state_file, "r") as f:
-            return json.load(f)
+        """Load sprint state from DB (always re-fetches)."""
+        # Always re-fetch to avoid stale cache
+        self._row = None
+        row = self._ensure_row()
+        if not row:
+            return {"status": "created", "started_at": None}
+        return {
+            "status": row.get("status", "unknown"),
+            "sprint_id": row.get("sprint_id", self.sprint_id),
+            "created_at": row.get("created_at"),
+            "started_at": row.get("started_at"),
+            "paused_at": row.get("paused_at"),
+            "completed_at": row.get("completed_at"),
+            "prompt": row.get("prompt"),
+            "epic_id": row.get("epic_id"),
+            "issues_total": row.get("issues_total", 0),
+            "issues_done": row.get("issues_done", 0),
+            "pid": row.get("pid"),
+            "error": row.get("error"),
+        }
 
     def save_state(self, state: Dict[str, Any]) -> None:
-        """Save sprint state."""
-        with open(self.state_file, "w") as f:
-            json.dump(state, f, indent=2)
-
-    def load_config(self) -> Dict[str, Any]:
-        """Load sprint-level config overrides."""
-        if not self.config_file.exists():
-            return {}
-        with open(self.config_file, "r") as f:
-            return yaml.safe_load(f) or {}
-
-    def get_log_file(self, agent_id: str) -> Path:
-        """Get the log file path for an agent."""
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        return self.log_dir / f"{agent_id}.log"
-
-    def get_task_file(self, agent_id: str) -> Path:
-        """Get the task checkpoint YAML for an agent."""
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        return self.log_dir / f"{agent_id}_task.yaml"
+        """Save sprint state to DB."""
+        repo = self._get_repo()
+        status = state.get("status", "created")
+        kwargs = {}
+        for key in ("pid", "prompt", "epic_id", "error"):
+            if key in state:
+                kwargs[key] = state[key]
+        repo.update_status(self.sprint_id, status, **kwargs)
+        if "issues_total" in state or "issues_done" in state:
+            repo.update_progress(
+                self.sprint_id,
+                state.get("issues_total", 0),
+                state.get("issues_done", 0),
+            )
+        # Invalidate cache
+        self._row = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to summary dict."""
@@ -100,11 +136,23 @@ class Sprint:
 
 
 class SprintManager:
-    """Manages sprint lifecycle within a project."""
+    """
+    Manages sprint lifecycle.
 
-    def __init__(self, repo_root: Path):
-        self.repo_root = Path(repo_root)
-        self.orchestify_dir = self.repo_root / ".orchestify"
+    All data lives in SQLite. No filesystem directories are created
+    for sprints (except artifacts/).
+    """
+
+    def __init__(self, db):
+        """
+        Initialize sprint manager.
+
+        Args:
+            db: DatabaseManager instance (required)
+        """
+        self._db = db
+        from orchestify.db.repositories import SprintRepository
+        self._sprint_repo = SprintRepository(db)
 
     def create(self, sprint_id: Optional[str] = None, prompt: Optional[str] = None) -> Sprint:
         """
@@ -120,148 +168,85 @@ class SprintManager:
         if sprint_id is None:
             sprint_id = generate_sprint_id()
 
-        sprint_dir = self.orchestify_dir / sprint_id
-        sprint_dir.mkdir(parents=True, exist_ok=True)
+        now = datetime.utcnow().isoformat()
 
-        sprint = Sprint(sprint_dir)
+        from orchestify.db.models import SprintRow
+        row = SprintRow(
+            sprint_id=sprint_id,
+            status="created",
+            prompt=prompt,
+            created_at=now,
+            updated_at=now,
+        )
+        self._sprint_repo.create(row)
 
-        # Create directory structure
-        sprint.log_dir.mkdir(parents=True, exist_ok=True)
+        sprint = Sprint(sprint_id, self._db)
+
+        # Create artifacts directory (only physical dir)
         sprint.artifacts_dir.mkdir(parents=True, exist_ok=True)
-        (sprint_dir / "personas").mkdir(exist_ok=True)
-        (sprint_dir / "rules").mkdir(exist_ok=True)
-        (sprint_dir / "prompts").mkdir(exist_ok=True)
-
-        # Initialize state
-        state = {
-            "status": "created",
-            "sprint_id": sprint_id,
-            "created_at": datetime.utcnow().isoformat(),
-            "started_at": None,
-            "paused_at": None,
-            "completed_at": None,
-            "prompt": prompt,
-            "epic_id": None,
-            "issues_total": 0,
-            "issues_done": 0,
-            "pid": None,
-        }
-        sprint.save_state(state)
-
-        # Write sprint config
-        sprint_config = {
-            "sprint_id": sprint_id,
-            "created_at": datetime.utcnow().isoformat(),
-            "overrides": {},
-        }
-        with open(sprint.config_file, "w") as f:
-            yaml.dump(sprint_config, f, default_flow_style=False)
 
         return sprint
 
     def get(self, sprint_id: str) -> Optional[Sprint]:
         """Get a sprint by ID."""
-        sprint_dir = self.orchestify_dir / sprint_id
-        if not sprint_dir.exists():
+        row = self._sprint_repo.get(sprint_id)
+        if row is None:
             return None
-        return Sprint(sprint_dir)
+        return Sprint(sprint_id, self._db, row=row)
 
-    def list_sprints(self) -> List[Sprint]:
-        """List all sprints in the project."""
-        if not self.orchestify_dir.exists():
-            return []
-
-        sprints = []
-        for item in sorted(self.orchestify_dir.iterdir()):
-            if item.is_dir() and (item / "state.json").exists():
-                sprints.append(Sprint(item))
-        return sprints
+    def list_sprints(self, status: Optional[str] = None) -> List[Sprint]:
+        """List all sprints from DB."""
+        rows = self._sprint_repo.list_all(status=status)
+        return [Sprint(r["sprint_id"], self._db, row=r) for r in rows]
 
     def get_active_sprint(self) -> Optional[Sprint]:
         """Get the currently running sprint (if any)."""
-        for sprint in self.list_sprints():
-            state = sprint.load_state()
-            if state.get("status") in ("running", "created"):
-                # Check if PID is still alive
-                pid = state.get("pid")
-                if pid and self._is_process_alive(pid):
-                    return sprint
-                elif state.get("status") == "running":
-                    # Process died, mark as paused
-                    state["status"] = "paused"
-                    state["paused_at"] = datetime.utcnow().isoformat()
-                    sprint.save_state(state)
+        rows = self._sprint_repo.list_all(status="running")
+        for row in rows:
+            pid = row.get("pid")
+            if pid and self._is_process_alive(pid):
+                return Sprint(row["sprint_id"], self._db, row=row)
+            else:
+                # Process died, mark as paused
+                self._sprint_repo.update_status(row["sprint_id"], "paused")
+
+        # Also check "created" sprints
+        rows = self._sprint_repo.list_all(status="created")
+        if rows:
+            return Sprint(rows[0]["sprint_id"], self._db, row=rows[0])
+
         return None
 
     def get_latest_sprint(self) -> Optional[Sprint]:
         """Get the most recently created sprint."""
-        sprints = self.list_sprints()
-        if not sprints:
+        row = self._sprint_repo.get_latest()
+        if row is None:
             return None
-        return sprints[-1]
+        return Sprint(row["sprint_id"], self._db, row=row)
 
     def pause(self, sprint_id: str) -> bool:
         """Pause a running sprint."""
-        sprint = self.get(sprint_id)
-        if not sprint:
+        row = self._sprint_repo.get(sprint_id)
+        if not row or row.get("status") != "running":
             return False
-        state = sprint.load_state()
-        if state.get("status") != "running":
-            return False
-        state["status"] = "paused"
-        state["paused_at"] = datetime.utcnow().isoformat()
-        sprint.save_state(state)
+        self._sprint_repo.update_status(sprint_id, "paused")
         return True
 
     def resume(self, sprint_id: str) -> bool:
         """Resume a paused sprint."""
-        sprint = self.get(sprint_id)
-        if not sprint:
+        row = self._sprint_repo.get(sprint_id)
+        if not row or row.get("status") != "paused":
             return False
-        state = sprint.load_state()
-        if state.get("status") != "paused":
-            return False
-        state["status"] = "running"
-        state["paused_at"] = None
-        state["pid"] = os.getpid()
-        sprint.save_state(state)
+        self._sprint_repo.update_status(sprint_id, "running", pid=os.getpid())
         return True
 
     def complete(self, sprint_id: str) -> bool:
         """Mark a sprint as complete."""
-        sprint = self.get(sprint_id)
-        if not sprint:
+        row = self._sprint_repo.get(sprint_id)
+        if not row:
             return False
-        state = sprint.load_state()
-        state["status"] = "complete"
-        state["completed_at"] = datetime.utcnow().isoformat()
-        sprint.save_state(state)
+        self._sprint_repo.update_status(sprint_id, "completed")
         return True
-
-    def update_gitignore(self) -> None:
-        """Ensure .orchestify is properly handled in .gitignore."""
-        gitignore = self.repo_root / ".gitignore"
-        entries = [
-            "# Orchestify runtime data",
-            ".orchestify/*/logs/",
-            ".orchestify/*/artifacts/",
-            ".orchestify/*/state.json",
-        ]
-
-        existing = ""
-        if gitignore.exists():
-            existing = gitignore.read_text()
-
-        additions = []
-        for entry in entries:
-            if entry not in existing:
-                additions.append(entry)
-
-        if additions:
-            with open(gitignore, "a") as f:
-                if existing and not existing.endswith("\n"):
-                    f.write("\n")
-                f.write("\n".join(additions) + "\n")
 
     @staticmethod
     def _is_process_alive(pid: int) -> bool:

@@ -1,13 +1,11 @@
 """
 State persistence module for ABD orchestration engine.
 
-Tracks workflow state per epic with thread-safe persistence to `.orchestify/state.json`.
+Tracks workflow state per epic. All data stored in SQLite — no file-based state.
 """
 
 import json
-import threading
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, asdict, field
 from enum import Enum
@@ -121,147 +119,160 @@ class EpicState:
 
 
 class StateManager:
-    """Thread-safe state manager for epic workflows."""
+    """State manager for epic workflows. All data stored in SQLite."""
 
-    def __init__(self, repo_root: Path):
+    def __init__(self, db, sprint_id: str):
         """
         Initialize state manager.
 
         Args:
-            repo_root: Root path of the target repository
+            db: DatabaseManager instance (required)
+            sprint_id: Sprint ID for DB context (required)
         """
-        self.repo_root = Path(repo_root)
-        self.state_dir = self.repo_root / ".orchestify"
-        self.state_file = self.state_dir / "state.json"
-        self._lock = threading.RLock()
-        self._ensure_state_dir()
+        self._db = db
+        self._sprint_id = sprint_id
 
-    def _ensure_state_dir(self) -> None:
-        """Ensure state directory exists."""
-        self.state_dir.mkdir(exist_ok=True)
-
-    def load(self) -> Dict[str, EpicState]:
-        """
-        Load all epic states from disk.
-
-        Returns:
-            Dictionary mapping epic_id to EpicState
-        """
-        with self._lock:
-            if not self.state_file.exists():
-                return {}
-
-            try:
-                with open(self.state_file, "r") as f:
-                    data = json.load(f)
-                return {
-                    epic_id: EpicState.from_dict(epic_data)
-                    for epic_id, epic_data in data.items()
-                }
-            except (json.JSONDecodeError, IOError) as e:
-                raise RuntimeError(f"Failed to load state: {e}")
-
-    def save(self) -> None:
-        """Save current state to disk."""
-        # This will be called by update methods
-        pass
-
-    def _persist_state(self, state: Dict[str, EpicState]) -> None:
-        """
-        Persist state dictionary to disk.
-
-        Args:
-            state: Dictionary mapping epic_id to EpicState
-        """
-        with self._lock:
-            try:
-                data = {
-                    epic_id: epic.to_dict()
-                    for epic_id, epic in state.items()
-                }
-                with open(self.state_file, "w") as f:
-                    json.dump(data, f, indent=2)
-            except IOError as e:
-                raise RuntimeError(f"Failed to persist state: {e}")
+        from orchestify.db.repositories import (
+            EpicRepository,
+            IssueRepository,
+            CycleRepository,
+        )
+        self._epic_repo = EpicRepository(db)
+        self._issue_repo = IssueRepository(db)
+        self._cycle_repo = CycleRepository(db)
 
     def get_epic(self, epic_id: str) -> Optional[EpicState]:
-        """
-        Get epic state by ID.
+        """Get epic state by ID."""
+        row = self._epic_repo.get(epic_id)
+        if not row:
+            return None
 
-        Args:
-            epic_id: Epic identifier
+        # Build EpicState from DB
+        epic = EpicState(
+            epic_id=epic_id,
+            status=EpicStatus(row.get("status", "pending")),
+            created_at=row.get("created_at", ""),
+            updated_at=row.get("updated_at", ""),
+        )
 
-        Returns:
-            EpicState or None if not found
-        """
-        state = self.load()
-        return state.get(epic_id)
+        # Load issues for this epic
+        issue_rows = self._issue_repo.list_by_sprint(self._sprint_id)
+        for ir in issue_rows:
+            if ir.get("epic_id") == epic_id:
+                issue = IssueState(
+                    issue_number=ir["issue_number"],
+                    status=IssueStatus(ir.get("status", "pending")),
+                    assigned_agent=ir.get("assigned_agent"),
+                    branch_name=ir.get("branch_name"),
+                    pr_number=ir.get("pr_number"),
+                    review_cycles=ir.get("review_cycles", 0),
+                    qa_cycles=ir.get("qa_cycles", 0),
+                    self_fix_attempts=ir.get("self_fix_attempts", 0),
+                    created_at=ir.get("created_at", ""),
+                    updated_at=ir.get("updated_at", ""),
+                )
+                
+                # Load cycle history for this issue
+                cycle_rows = self._cycle_repo.list_by_issue(ir["id"])
+                for cr in cycle_rows:
+                    cycle = CycleState(
+                        cycle_number=cr["cycle_number"],
+                        agent_from=cr["agent_from"],
+                        agent_to=cr["agent_to"],
+                        action=cr["action"],
+                        result=cr["result"],
+                        timestamp=cr.get("timestamp", ""),
+                    )
+                    issue.cycle_history.append(cycle)
+                
+                epic.issues.append(issue)
+
+        return epic
 
     def create_epic(self, epic_id: str) -> EpicState:
-        """
-        Create a new epic state.
+        """Create a new epic state."""
+        # Check if already exists
+        existing = self._epic_repo.get(epic_id)
+        if existing:
+            return self.get_epic(epic_id)
 
-        Args:
-            epic_id: Epic identifier
+        from orchestify.db.models import EpicRow
+        row = EpicRow(
+            epic_id=epic_id,
+            sprint_id=self._sprint_id,
+            status="pending",
+        )
+        self._epic_repo.create(row)
 
-        Returns:
-            Created EpicState
-        """
-        with self._lock:
-            state = self.load()
-            if epic_id in state:
-                return state[epic_id]
-
-            epic = EpicState(epic_id=epic_id)
-            state[epic_id] = epic
-            self._persist_state(state)
-            return epic
+        return EpicState(epic_id=epic_id)
 
     def update_issue(
         self, epic_id: str, issue_number: int, data: Dict[str, Any]
     ) -> IssueState:
-        """
-        Update or create an issue in an epic.
+        """Update or create an issue in an epic."""
+        # Ensure epic exists
+        if not self._epic_repo.get(epic_id):
+            self.create_epic(epic_id)
 
-        Args:
-            epic_id: Epic identifier
-            issue_number: GitHub issue number
-            data: Fields to update
+        # Check if issue exists in DB
+        db_issue = self._issue_repo.get_by_number(issue_number, epic_id)
 
-        Returns:
-            Updated IssueState
-        """
-        with self._lock:
-            state = self.load()
-            if epic_id not in state:
-                state[epic_id] = EpicState(epic_id=epic_id)
+        status = data.get("status", "pending")
+        if isinstance(status, IssueStatus):
+            status = status.value
 
-            epic = state[epic_id]
+        if db_issue is None:
+            # Create new issue
+            from orchestify.db.models import IssueRow
+            row = IssueRow(
+                issue_number=issue_number,
+                epic_id=epic_id,
+                sprint_id=self._sprint_id,
+                status=status,
+                assigned_agent=data.get("assigned_agent"),
+                branch_name=data.get("branch_name"),
+                pr_number=data.get("pr_number"),
+                review_cycles=data.get("review_cycles", 0),
+                qa_cycles=data.get("qa_cycles", 0),
+                self_fix_attempts=data.get("self_fix_attempts", 0),
+            )
+            self._issue_repo.create(row)
+        else:
+            # Update existing - build kwargs for all fields to update
+            update_kwargs = {
+                "assigned_agent": data.get("assigned_agent", db_issue.get("assigned_agent")),
+                "branch_name": data.get("branch_name", db_issue.get("branch_name")),
+                "pr_number": data.get("pr_number", db_issue.get("pr_number")),
+            }
+            
+            # Add cycle updates if provided
+            if "review_cycles" in data:
+                update_kwargs["review_cycles"] = data["review_cycles"]
+            if "qa_cycles" in data:
+                update_kwargs["qa_cycles"] = data["qa_cycles"]
+            if "self_fix_attempts" in data:
+                update_kwargs["self_fix_attempts"] = data["self_fix_attempts"]
+            
+            self._issue_repo.update_status(
+                db_issue["id"],
+                status,
+                **update_kwargs
+            )
 
-            # Find or create issue
-            issue = None
-            for iss in epic.issues:
-                if iss.issue_number == issue_number:
-                    issue = iss
-                    break
-
-            if issue is None:
-                issue = IssueState(issue_number=issue_number)
-                epic.issues.append(issue)
-
-            # Update fields
-            for key, value in data.items():
-                if hasattr(issue, key):
-                    if key == "status" and isinstance(value, str):
-                        setattr(issue, key, IssueStatus(value))
-                    else:
-                        setattr(issue, key, value)
-
-            issue.updated_at = datetime.utcnow().isoformat()
-            epic.updated_at = datetime.utcnow().isoformat()
-
-            self._persist_state(state)
-            return issue
+        # Build IssueState from current DB state
+        updated = self._issue_repo.get_by_number(issue_number, epic_id)
+        if updated:
+            return IssueState(
+                issue_number=updated["issue_number"],
+                status=IssueStatus(updated.get("status", "pending")),
+                assigned_agent=updated.get("assigned_agent"),
+                branch_name=updated.get("branch_name"),
+                pr_number=updated.get("pr_number"),
+                review_cycles=updated.get("review_cycles", 0),
+                qa_cycles=updated.get("qa_cycles", 0),
+                self_fix_attempts=updated.get("self_fix_attempts", 0),
+            )
+        return IssueState(issue_number=issue_number)
 
     def add_cycle(
         self,
@@ -272,60 +283,36 @@ class StateManager:
         action: str,
         result: str,
     ) -> CycleState:
-        """
-        Add a cycle record to an issue's history.
+        """Add a cycle record to an issue's history."""
+        db_issue = self._issue_repo.get_by_number(issue_number, epic_id)
+        if not db_issue:
+            raise ValueError(f"Issue {issue_number} not found in epic {epic_id}")
 
-        Args:
-            epic_id: Epic identifier
-            issue_number: GitHub issue number
-            agent_from: Agent performing action
-            agent_to: Next agent in cycle
-            action: Action description
-            result: Action result
+        # Count existing cycles to determine cycle_number
+        existing_cycles = self._cycle_repo.list_by_issue(db_issue["id"])
+        cycle_number = len(existing_cycles) + 1
 
-        Returns:
-            Created CycleState
-        """
-        with self._lock:
-            state = self.load()
-            if epic_id not in state:
-                raise ValueError(f"Epic {epic_id} not found")
+        from orchestify.db.models import CycleRow
+        row = CycleRow(
+            issue_id=db_issue["id"],
+            cycle_number=cycle_number,
+            agent_from=agent_from,
+            agent_to=agent_to,
+            action=action,
+            result=result,
+        )
+        self._cycle_repo.create(row)
 
-            epic = state[epic_id]
-            issue = None
-            for iss in epic.issues:
-                if iss.issue_number == issue_number:
-                    issue = iss
-                    break
-
-            if issue is None:
-                raise ValueError(f"Issue {issue_number} not found in epic {epic_id}")
-
-            cycle_number = len(issue.cycle_history) + 1
-            cycle = CycleState(
-                cycle_number=cycle_number,
-                agent_from=agent_from,
-                agent_to=agent_to,
-                action=action,
-                result=result,
-            )
-            issue.cycle_history.append(cycle)
-            issue.updated_at = datetime.utcnow().isoformat()
-            epic.updated_at = datetime.utcnow().isoformat()
-
-            self._persist_state(state)
-            return cycle
+        return CycleState(
+            cycle_number=cycle_number,
+            agent_from=agent_from,
+            agent_to=agent_to,
+            action=action,
+            result=result,
+        )
 
     def get_next_issue(self, epic_id: str) -> Optional[IssueState]:
-        """
-        Get the next pending issue in an epic.
-
-        Args:
-            epic_id: Epic identifier
-
-        Returns:
-            Next pending IssueState or None
-        """
+        """Get the next pending issue in an epic."""
         epic = self.get_epic(epic_id)
         if not epic:
             return None
@@ -337,15 +324,7 @@ class StateManager:
         return None
 
     def is_epic_complete(self, epic_id: str) -> bool:
-        """
-        Check if all issues in an epic are complete.
-
-        Args:
-            epic_id: Epic identifier
-
-        Returns:
-            True if all issues are done or escalated
-        """
+        """Check if all issues in an epic are complete."""
         epic = self.get_epic(epic_id)
         if not epic or not epic.issues:
             return False
@@ -357,23 +336,8 @@ class StateManager:
         return True
 
     def update_epic_status(self, epic_id: str, status: EpicStatus) -> EpicState:
-        """
-        Update epic status.
-
-        Args:
-            epic_id: Epic identifier
-            status: New status
-
-        Returns:
-            Updated EpicState
-        """
-        with self._lock:
-            state = self.load()
-            if epic_id not in state:
-                raise ValueError(f"Epic {epic_id} not found")
-
-            epic = state[epic_id]
-            epic.status = status
-            epic.updated_at = datetime.utcnow().isoformat()
-            self._persist_state(state)
-            return epic
+        """Update epic status."""
+        if not self._epic_repo.get(epic_id):
+            raise ValueError(f"Epic {epic_id} not found")
+        self._epic_repo.update_status(epic_id, status.value)
+        return self.get_epic(epic_id)

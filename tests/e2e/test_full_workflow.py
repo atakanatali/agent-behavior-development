@@ -33,22 +33,14 @@ from orchestify.utils.validators import (
 class TestFullDevelopmentLifecycle:
     """Simulate a complete feature development through the ABD pipeline."""
 
-    @pytest.fixture
-    def repo(self, tmp_path):
-        """Create a simulated repository."""
-        repo = tmp_path / "e2e-repo"
-        repo.mkdir()
-        (repo / ".orchestify").mkdir()
-        return repo
-
-    def test_complete_feature_development(self, repo):
+    def test_complete_feature_development(self, sprint_db):
         """
         Simulate the complete flow:
         1. TPM creates epic with issues
         2. Issues go through engineer -> reviewer -> QA -> architect
         3. Epic completes successfully
         """
-        sm = StateManager(repo)
+        sm = StateManager(sprint_db, sprint_id="test-sprint")
 
         # ═══ PHASE 1: TPM creates epic ═══
         epic = sm.create_epic("epic-auth-feature")
@@ -164,15 +156,14 @@ class TestFullDevelopmentLifecycle:
             assert issue.review_cycles == 2
             assert issue.qa_cycles == 1
             assert len(issue.cycle_history) == 6
-            assert issue.scorecard["total"] == 8
-            assert issue.scorecard["interpretation"] == "promote"
-            assert len(issue.recycle_output["kept"]) == 1
+            # Scorecards and recycle patterns are tracked in separate DB tables
+            # (issue_scorecards, issue_recycle_patterns) — not on IssueState directly
 
-    def test_escalation_after_max_cycles(self, repo):
+    def test_escalation_after_max_cycles(self, sprint_db):
         """
         Test that an issue escalates to user after max review cycles.
         """
-        sm = StateManager(repo)
+        sm = StateManager(sprint_db, sprint_id="test-sprint")
         sm.create_epic("epic-escalation")
         sm.update_epic_status("epic-escalation", EpicStatus.IN_PROGRESS)
         sm.update_issue("epic-escalation", 1, {
@@ -204,11 +195,11 @@ class TestFullDevelopmentLifecycle:
         assert epic.issues[0].status == IssueStatus.ESCALATED
         assert epic.issues[0].review_cycles == 3
 
-    def test_qa_rejection_sends_back_through_reviewer(self, repo):
+    def test_qa_rejection_sends_back_through_reviewer(self, sprint_db):
         """
         Test the critical recycle flow: QA rejection -> engineer -> reviewer -> QA.
         """
-        sm = StateManager(repo)
+        sm = StateManager(sprint_db, sprint_id="test-sprint")
         sm.create_epic("epic-qa-reject")
         sm.update_epic_status("epic-qa-reject", EpicStatus.IN_PROGRESS)
         sm.update_issue("epic-qa-reject", 1, {
@@ -248,24 +239,6 @@ class TestFullDevelopmentLifecycle:
         assert issue.review_cycles == 2
         assert issue.qa_cycles == 2
         assert len(issue.cycle_history) == 7  # Full cycle history
-
-    def test_state_file_valid_json(self, repo):
-        """State file should always be valid JSON."""
-        sm = StateManager(repo)
-        sm.create_epic("json-test")
-        sm.update_issue("json-test", 1, {"status": IssueStatus.IN_PROGRESS})
-        sm.add_cycle("json-test", 1, "a", "b", "c", "d")
-
-        state_file = repo / ".orchestify" / "state.json"
-        assert state_file.exists()
-
-        # Must parse as valid JSON
-        with open(state_file) as f:
-            data = json.load(f)
-
-        assert "json-test" in data
-        assert data["json-test"]["status"] == "pending"  # Epic status not changed from default
-        assert len(data["json-test"]["issues"]) == 1
 
     def test_scorecard_validation_integration(self):
         """End-to-end scorecard creation and validation."""

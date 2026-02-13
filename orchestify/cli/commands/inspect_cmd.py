@@ -1,5 +1,6 @@
 """orchestify inspect — View agent activity and logs."""
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -8,9 +9,11 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.syntax import Syntax
+from rich.live import Live
 
 from orchestify.core.sprint import SprintManager
 from orchestify.core.agent_logger import AgentLogger
+from orchestify.cli.commands._db_helper import get_db
 from orchestify.cli.ui.formatting import error, info
 
 console = Console()
@@ -24,6 +27,8 @@ console = Console()
               help="Filter by log level")
 @click.option("--timeline", is_flag=True, help="Show merged timeline of all agents")
 @click.option("--task", is_flag=True, help="Show current task checkpoint")
+@click.option("--follow", "-f", is_flag=True, help="Live tail agent output (requires --agent)")
+@click.option("--messages", is_flag=True, help="Show agent messages (DB-backed)")
 def inspect(
     sprint: Optional[str],
     agent: Optional[str],
@@ -31,13 +36,16 @@ def inspect(
     level: Optional[str],
     timeline: bool,
     task: bool,
+    follow: bool,
+    messages: bool,
 ) -> None:
     """View agent activity, logs, and task checkpoints.
 
     Shows what each agent is doing, their outputs, and execution history.
+    Use --follow to live-tail an agent's console output.
     """
-    repo_root = Path.cwd()
-    sprint_manager = SprintManager(repo_root)
+    db = get_db()
+    sprint_manager = SprintManager(db)
 
     # Find sprint
     if sprint:
@@ -49,9 +57,16 @@ def inspect(
         error("No sprint found. Run [cyan]orchestify init[/cyan] first.")
         sys.exit(1)
 
-    logger = AgentLogger(active_sprint.log_dir)
+    logger = AgentLogger(db, sprint_id=active_sprint.sprint_id)
 
-    if timeline:
+    if follow:
+        if not agent:
+            error("--follow requires --agent <id>")
+            sys.exit(1)
+        _follow_agent(db, active_sprint.sprint_id, agent)
+    elif messages and agent:
+        _show_agent_messages(db, active_sprint.sprint_id, agent, limit)
+    elif timeline:
         _show_timeline(logger, limit)
     elif task and agent:
         _show_task_checkpoint(logger, agent)
@@ -88,6 +103,7 @@ def _show_overview(logger: AgentLogger, sprint) -> None:
 
     console.print(table)
     console.print("\n[dim]Use --agent <id> to see detailed logs.[/dim]")
+    console.print("[dim]Use --agent <id> --follow to live-tail output.[/dim]")
 
 
 def _show_agent_logs(logger: AgentLogger, agent_id: str, limit: int, level: Optional[str]) -> None:
@@ -121,6 +137,40 @@ def _show_agent_logs(logger: AgentLogger, agent_id: str, limit: int, level: Opti
         )
 
     console.print(table)
+
+
+def _show_agent_messages(db, sprint_id: str, agent_id: str, limit: int) -> None:
+    """Show agent messages from the database."""
+    try:
+        from orchestify.db.repositories import MessageRepository
+        repo = MessageRepository(db)
+        messages = repo.get_by_agent(sprint_id, agent_id, limit=limit)
+
+        if not messages:
+            console.print(f"[dim]No messages found for agent '{agent_id}'.[/dim]")
+            return
+
+        table = Table(title=f"Messages — {agent_id}", border_style="cyan")
+        table.add_column("Time", style="dim", no_wrap=True)
+        table.add_column("Type", style="yellow", no_wrap=True)
+        table.add_column("Level", style="dim", no_wrap=True)
+        table.add_column("Content", style="white", max_width=80)
+
+        for msg in messages:
+            content = msg.get("content", "")
+            if len(content) > 80:
+                content = content[:77] + "..."
+
+            table.add_row(
+                msg.get("timestamp", "")[:19],
+                msg.get("message_type", ""),
+                msg.get("level", ""),
+                content,
+            )
+
+        console.print(table)
+    except Exception as e:
+        error(f"Failed to read messages: {e}")
 
 
 def _show_task_checkpoint(logger: AgentLogger, agent_id: str) -> None:
@@ -157,7 +207,53 @@ def _show_timeline(logger: AgentLogger, limit: int) -> None:
         table.add_row(
             entry.get("timestamp", "")[:19],
             entry.get("agent_id", "?"),
-            entry.get("event", ""),
+            entry.get("event", entry.get("content", "")),
         )
 
     console.print(table)
+
+
+def _follow_agent(db, sprint_id: str, agent_id: str) -> None:
+    """Live-tail agent output using AgentConsoleReader."""
+    try:
+        from orchestify.db.console import AgentConsoleReader
+
+        reader = AgentConsoleReader(
+            db=db,
+            sprint_id=sprint_id,
+            agent_id=agent_id,
+            poll_interval=0.2,
+        )
+
+        console.print(f"[cyan]Tailing agent '{agent_id}' (Ctrl+C to stop)...[/cyan]\n")
+
+        def _print_message(msg: dict) -> None:
+            ts = msg.get("timestamp", "")[:19]
+            msg_type = msg.get("message_type", "output")
+            content = msg.get("content", "")
+            level = msg.get("level", "INFO")
+
+            type_colors = {
+                "error": "red",
+                "warning": "yellow",
+                "output": "white",
+                "log": "dim",
+                "communication": "cyan",
+                "checkpoint": "green",
+            }
+            color = type_colors.get(msg_type, "white")
+            console.print(f"[dim]{ts}[/dim] [{color}]{content}[/{color}]")
+
+        try:
+            reader.tail(
+                callback=_print_message,
+                history_lines=50,
+            )
+        except KeyboardInterrupt:
+            reader.stop()
+            console.print("\n[dim]Stopped tailing.[/dim]")
+
+    except ImportError:
+        error("Console reader not available.")
+    except Exception as e:
+        error(f"Failed to tail agent: {e}")

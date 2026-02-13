@@ -154,7 +154,6 @@ class BaseAgent(ABC):
         agent_id: str,
         config: Dict[str, Any],
         provider: Any,
-        memory_client: Optional[Any] = None,
     ):
         """
         Initialize agent.
@@ -163,12 +162,10 @@ class BaseAgent(ABC):
             agent_id: Unique agent identifier
             config: Configuration dictionary
             provider: LLM provider instance
-            memory_client: Optional memory client for context
         """
         self.agent_id = agent_id
         self.config = config
         self.provider = provider
-        self.memory_client = memory_client
         self.persona_prompt = self._load_persona()
         self.guardrails = self._load_guardrails()
 

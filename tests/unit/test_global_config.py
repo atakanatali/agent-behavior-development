@@ -20,20 +20,21 @@ from orchestify.core.global_config import (
 class TestGlobalConfigPaths:
     def test_default_config_dir(self):
         with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("XDG_CONFIG_HOME", None)
+            os.environ.pop("ORCHESTIFY_HOME", None)
             config_dir = get_global_config_dir()
-            assert config_dir == Path.home() / ".config" / "orchestify"
+            assert config_dir == Path.home() / ".orchestify" / "config"
 
-    def test_xdg_config_dir(self):
-        with patch.dict(os.environ, {"XDG_CONFIG_HOME": "/tmp/xdg"}):
+    def test_custom_home_config_dir(self):
+        with patch.dict(os.environ, {"ORCHESTIFY_HOME": "/tmp/custom_orch"}):
             config_dir = get_global_config_dir()
-            assert config_dir == Path("/tmp/xdg/orchestify")
+            assert config_dir == Path("/tmp/custom_orch/config")
 
     def test_config_path(self):
         with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("XDG_CONFIG_HOME", None)
+            os.environ.pop("ORCHESTIFY_HOME", None)
             config_path = get_global_config_path()
             assert config_path.name == "global.yaml"
+            assert config_path.parent == Path.home() / ".orchestify" / "config"
 
 
 class TestGlobalConfigIO:

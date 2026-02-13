@@ -29,7 +29,6 @@ class OrchestrifyEngine:
         config: Dict[str, Any],
         state_manager: StateManager,
         provider_registry: Dict[str, Any],
-        memory_client: Optional[Any] = None,
     ):
         """
         Initialize orchestration engine.
@@ -38,12 +37,10 @@ class OrchestrifyEngine:
             config: Engine configuration
             state_manager: State persistence manager
             provider_registry: Registry of LLM providers
-            memory_client: Optional memory client
         """
         self.config = config
         self.state_manager = state_manager
         self.provider_registry = provider_registry
-        self.memory_client = memory_client
         self.agents = {}
         self.logger = get_logger(__name__)
 

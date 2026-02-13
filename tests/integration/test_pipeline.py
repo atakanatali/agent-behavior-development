@@ -31,7 +31,7 @@ class MockAgent(BaseAgent):
         self.agent_id = agent_id
         self.config = config or {}
         self.provider = provider
-        self.memory_client = None
+
         self.persona_prompt = "Mock persona"
         self.guardrails = ""
         self._mock_output = output
@@ -63,9 +63,9 @@ class MockAgent(BaseAgent):
 
 
 class TestStateIntegration:
-    def test_full_epic_lifecycle(self, tmp_repo):
+    def test_full_epic_lifecycle(self, sprint_db):
         """Test creating and completing an epic with issues."""
-        sm = StateManager(tmp_repo)
+        sm = StateManager(sprint_db, sprint_id="test-sprint")
 
         # Create epic
         epic = sm.create_epic("epic-integration-001")
@@ -116,24 +116,24 @@ class TestStateIntegration:
         for issue in epic.issues:
             assert len(issue.cycle_history) == 3
 
-    def test_state_persistence_across_instances(self, tmp_repo):
+    def test_state_persistence_across_instances(self, sprint_db):
         """State should survive across StateManager instances."""
-        sm1 = StateManager(tmp_repo)
+        sm1 = StateManager(sprint_db, sprint_id="test-sprint")
         sm1.create_epic("persist-test")
         sm1.update_issue("persist-test", 1, {"status": IssueStatus.IN_PROGRESS})
         sm1.add_cycle("persist-test", 1, "engineer", "reviewer", "PR", "OK")
 
         # New instance reads same state
-        sm2 = StateManager(tmp_repo)
+        sm2 = StateManager(sprint_db, sprint_id="test-sprint")
         epic = sm2.get_epic("persist-test")
         assert epic is not None
         assert len(epic.issues) == 1
         assert epic.issues[0].status == IssueStatus.IN_PROGRESS
         assert len(epic.issues[0].cycle_history) == 1
 
-    def test_multiple_epics(self, tmp_repo):
+    def test_multiple_epics(self, sprint_db):
         """Multiple epics can coexist."""
-        sm = StateManager(tmp_repo)
+        sm = StateManager(sprint_db, sprint_id="test-sprint")
         sm.create_epic("epic-a")
         sm.create_epic("epic-b")
         sm.update_issue("epic-a", 1, {"status": IssueStatus.DONE})
@@ -142,9 +142,9 @@ class TestStateIntegration:
         assert sm.is_epic_complete("epic-a") is True
         assert sm.is_epic_complete("epic-b") is False
 
-    def test_issue_escalation_flow(self, tmp_repo):
+    def test_issue_escalation_flow(self, sprint_db):
         """Test the escalation path."""
-        sm = StateManager(tmp_repo)
+        sm = StateManager(sprint_db, sprint_id="test-sprint")
         sm.create_epic("escalation-test")
         sm.update_issue("escalation-test", 1, {"status": IssueStatus.IN_PROGRESS})
 
@@ -174,14 +174,13 @@ class TestStateIntegration:
 
 class TestEngineIntegration:
     @pytest.fixture
-    def engine_setup(self, tmp_repo):
+    def engine_setup(self, sprint_db):
         """Setup engine with mock agents."""
-        sm = StateManager(tmp_repo)
+        sm = StateManager(sprint_db, sprint_id="test-sprint")
         engine = OrchestrifyEngine(
             config={"max_self_fixes": 3},
             state_manager=sm,
             provider_registry={},
-            memory_client=None,
         )
 
         # Register mock agents
@@ -244,17 +243,27 @@ class TestScorecardValidationIntegration:
         )
         assert sc_low.interpretation.value == "anti-pattern"
 
-    def test_state_stores_scorecard(self, tmp_repo):
-        """Scorecards can be stored in issue state."""
-        sm = StateManager(tmp_repo)
+    def test_state_stores_scorecard(self, sprint_db):
+        """Scorecards can be stored via the AgentLogger to issue_scorecards table."""
+        from orchestify.core.agent_logger import AgentLogger
+        sm = StateManager(sprint_db, sprint_id="test-sprint")
         sm.create_epic("scorecard-test")
+        issue = sm.update_issue("scorecard-test", 1, {"status": IssueStatus.IN_PROGRESS})
+
+        # Store scorecard via logger (separate table)
         sc = Scorecard(
             scope_control=2, behavior_fidelity=2,
             evidence_orientation=1, actionability=2, risk_awareness=1,
         )
-        sm.update_issue("scorecard-test", 1, {"scorecard": sc.to_dict()})
+        logger = AgentLogger(sprint_db, sprint_id="test-sprint")
 
-        epic = sm.get_epic("scorecard-test")
-        stored_sc = epic.issues[0].scorecard
-        assert stored_sc["total"] == 8
-        assert stored_sc["interpretation"] == "promote"
+        # Get the DB issue id for the scorecard FK
+        db_issue = sm._issue_repo.get_by_number(1, "scorecard-test")
+        logger.log_scorecard("engineer", sc.to_dict(), issue_id=db_issue["id"])
+
+        # Verify via DB
+        from orchestify.db.repositories import ScorecardRepository
+        stored = ScorecardRepository(sprint_db).get_by_issue(db_issue["id"])
+        assert len(stored) == 1
+        assert stored[0]["total"] == 8
+        assert stored[0]["interpretation"] == "promote"

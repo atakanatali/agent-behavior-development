@@ -1,4 +1,4 @@
-"""orchestify init — Initialize a sprint in the current git repository."""
+"""orchestify init — Initialize global home and create a sprint (agent session)."""
 import os
 import subprocess
 import sys
@@ -8,10 +8,12 @@ from typing import Optional
 import click
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Prompt
 
 from orchestify.core.sprint import SprintManager, generate_sprint_id
-from orchestify.core.global_config import load_global_config, is_installed
+from orchestify.core.global_config import (
+    load_global_config, is_installed,
+    get_orchestify_home, ensure_global_home,
+)
 from orchestify.cli.ui.formatting import error, success, info, warn, step
 
 console = Console()
@@ -46,8 +48,40 @@ def _check_gh_cli() -> bool:
         return False
 
 
+def _init_global_home() -> Path:
+    """Initialize the global ~/.orchestify/ home directory."""
+    home = ensure_global_home()
+    info(f"  Global home: {home}")
+    return home
+
+
+def _init_database():
+    """Initialize the SQLite database and run pending migrations."""
+    try:
+        from orchestify.db.database import DatabaseManager, get_db_path
+        from orchestify.migrations.runner import MigrationRunner
+
+        db_path = get_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        db = DatabaseManager(db_path)
+        runner = MigrationRunner(db)
+
+        applied = runner.run_pending()
+        if applied:
+            for version, desc in applied:
+                info(f"  Migration {version:03d}: {desc}")
+        else:
+            info("  Database is up to date.")
+
+        return db
+    except Exception as e:
+        warn(f"Database initialization failed: {e}")
+        return None
+
+
 def _create_default_configs(config_dir: Path, global_config: dict) -> None:
-    """Create default project configuration files."""
+    """Create default project configuration files in the git repo's config/ dir."""
     config_dir.mkdir(parents=True, exist_ok=True)
 
     defaults = global_config.get("defaults", {})
@@ -55,7 +89,6 @@ def _create_default_configs(config_dir: Path, global_config: dict) -> None:
     provider = defaults.get("provider", "anthropic")
     model = defaults.get("model", "claude-opus-4-6")
 
-    # orchestify.yaml
     orchestify_yaml = config_dir / "orchestify.yaml"
     if not orchestify_yaml.exists():
         orchestify_yaml.write_text(f"""project:
@@ -89,7 +122,6 @@ dev_loop:
   timeout_per_command: 120
 """)
 
-    # agents.yaml
     agents_yaml = config_dir / "agents.yaml"
     if not agents_yaml.exists():
         agents_yaml.write_text(f"""agents:
@@ -130,7 +162,6 @@ dev_loop:
     max_tokens: 8192
 """)
 
-    # providers.yaml
     providers_yaml = config_dir / "providers.yaml"
     if not providers_yaml.exists():
         providers_yaml.write_text(f"""providers:
@@ -146,81 +177,61 @@ dev_loop:
     max_tokens: 8192
 """)
 
-    # memory.yaml
-    memory_yaml = config_dir / "memory.yaml"
-    if not memory_yaml.exists():
-        mem_config = global_config.get("memory", {})
-        memory_yaml.write_text(f"""contextify:
-  enabled: {str(mem_config.get('enabled', False)).lower()}
-  host: "{mem_config.get('contextify_host', 'http://localhost:8080')}"
-  protocol: "http"
-  layers:
-    agent:
-      ttl: null
-      max_entries: 1000
-    epic:
-      ttl: null
-      max_entries: 1000
-    global:
-      ttl: null
-      max_entries: 1000
-
-fallback:
-  type: "local_json"
-  path: ".orchestify/memory/"
-""")
-
 
 @click.command()
 @click.option("--name", help="Custom sprint name/ID")
 @click.option("--prompt", "-p", help="Initial prompt/goal for the sprint")
 @click.option("--no-git-check", is_flag=True, help="Skip git repository check")
 def init(name: Optional[str], prompt: Optional[str], no_git_check: bool) -> None:
-    """Initialize a new sprint in the current git repository.
+    """Initialize orchestify global home and create a new sprint.
 
-    Creates the .orchestify/ directory structure and config files.
-    Each sprint gets an isolated execution context.
+    Sets up ~/.orchestify/ (global home with DB, config, personas, etc.)
+    and creates a sprint (agent session) in the database.
     """
     repo_root = Path.cwd()
 
-    # Check git repo
     if not no_git_check and not _check_git_repo(repo_root):
         error("Not a git repository. Run this command in a git repo.")
         console.print("[dim]Use --no-git-check to skip this check.[/dim]")
         sys.exit(1)
 
-    # Check gh CLI
     if not _check_gh_cli():
         warn("GitHub CLI (gh) not found. Some features may not work.")
 
-    # Load global config
-    global_config = load_global_config()
+    # Step 1: Global home
+    step(1, 4, "Setting up global home (~/.orchestify/)...")
+    orchestify_home = _init_global_home()
 
-    # Create project config if needed
+    # Step 2: Project config
+    global_config = load_global_config()
     config_dir = repo_root / "config"
     if not config_dir.exists():
-        step(1, 4, "Creating project configuration...")
+        step(2, 4, "Creating project configuration...")
         _create_default_configs(config_dir, global_config)
     else:
-        step(1, 4, "Project configuration found.")
+        step(2, 4, "Project configuration found.")
 
-    # Create sprint
-    step(2, 4, "Creating sprint...")
-    sprint_manager = SprintManager(repo_root)
+    # Step 3: Database
+    step(3, 4, "Initializing database...")
+    db = _init_database()
+    if db is None:
+        error("Database initialization failed. Cannot continue.")
+        sys.exit(1)
+
+    # Step 4: Create sprint (DB-only)
+    step(4, 4, "Creating sprint...")
+    sprint_manager = SprintManager(db)
     sprint = sprint_manager.create(sprint_id=name, prompt=prompt)
 
-    # Update .gitignore
-    step(3, 4, "Updating .gitignore...")
-    sprint_manager.update_gitignore()
-
-    # Summary
-    step(4, 4, "Done!")
+    from orchestify.db.database import get_db_path
+    db_path = get_db_path()
 
     console.print()
     console.print(Panel(
         f"[bold green]Sprint initialized![/bold green]\n\n"
-        f"Sprint ID: [bold cyan]{sprint.sprint_id}[/bold cyan]\n"
-        f"Directory: [dim]{sprint.sprint_dir}[/dim]\n"
+        f"Sprint ID:   [bold cyan]{sprint.sprint_id}[/bold cyan]\n"
+        f"Global home: [dim]{orchestify_home}[/dim]\n"
+        f"Database:    [dim]{db_path}[/dim]\n"
         + (f"Prompt: [yellow]{prompt}[/yellow]\n" if prompt else "")
         + "\n"
         f"Next steps:\n"

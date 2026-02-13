@@ -10,6 +10,7 @@ from rich.table import Table
 
 from orchestify.core.sprint import SprintManager
 from orchestify.core.config import load_config
+from orchestify.cli.commands._db_helper import get_db
 from orchestify.cli.ui.formatting import error
 
 console = Console()
@@ -20,6 +21,7 @@ STATUS_ICONS = {
     "running": "[yellow]●[/yellow]",
     "paused": "[yellow]◎[/yellow]",
     "complete": "[green]●[/green]",
+    "completed": "[green]●[/green]",
     "error": "[red]●[/red]",
 }
 
@@ -29,21 +31,19 @@ STATUS_ICONS = {
 @click.option("--all", "show_all", is_flag=True, help="Show all sprints")
 def status(sprint: Optional[str], show_all: bool) -> None:
     """Show current sprint and pipeline status."""
-    repo_root = Path.cwd()
-    sprint_manager = SprintManager(repo_root)
+    db = get_db()
+    sprint_manager = SprintManager(db)
 
     if sprint:
-        # Show specific sprint
         s = sprint_manager.get(sprint)
         if not s:
             error(f"Sprint '{sprint}' not found.")
             sys.exit(1)
         _show_sprint_detail(s)
     elif show_all:
-        # Show all sprints
         _show_all_sprints(sprint_manager)
     else:
-        # Show latest sprint + project overview
+        repo_root = Path.cwd()
         _show_overview(repo_root, sprint_manager)
 
 
@@ -51,7 +51,6 @@ def _show_overview(repo_root: Path, sprint_manager: SprintManager) -> None:
     """Show project overview with latest sprint."""
     config_dir = repo_root / "config"
 
-    # Project info
     if config_dir.exists():
         try:
             config = load_config(config_dir)
@@ -68,7 +67,6 @@ def _show_overview(repo_root: Path, sprint_manager: SprintManager) -> None:
         console.print("[yellow]No project config found. Run [cyan]orchestify init[/cyan] first.[/yellow]")
         return
 
-    # Latest sprint
     latest = sprint_manager.get_latest_sprint()
     if latest:
         _show_sprint_detail(latest)

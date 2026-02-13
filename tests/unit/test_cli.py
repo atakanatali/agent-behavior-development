@@ -51,10 +51,6 @@ class TestCLIBasics:
         assert result.exit_code == 0
         assert "agent" in result.output.lower()
 
-    def test_memory_help(self, runner):
-        result = runner.invoke(cli, ["memory", "--help"])
-        assert result.exit_code == 0
-
     def test_config_help(self, runner):
         result = runner.invoke(cli, ["config", "--help"])
         assert result.exit_code == 0

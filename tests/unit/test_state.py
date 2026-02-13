@@ -230,14 +230,6 @@ class TestEpicStatus:
 
 
 class TestStateManager:
-    def test_init_creates_state_dir(self, tmp_repo):
-        sm = StateManager(tmp_repo)
-        assert sm.state_dir.exists()
-
-    def test_load_empty_state(self, state_manager):
-        state = state_manager.load()
-        assert state == {}
-
     def test_create_epic(self, state_manager):
         epic = state_manager.create_epic("epic-001")
         assert epic.epic_id == "epic-001"
@@ -250,9 +242,9 @@ class TestStateManager:
 
     def test_create_epic_persists(self, state_manager):
         state_manager.create_epic("epic-001")
-        state = state_manager.load()
-        assert "epic-001" in state
-        assert state["epic-001"].epic_id == "epic-001"
+        epic = state_manager.get_epic("epic-001")
+        assert epic is not None
+        assert epic.epic_id == "epic-001"
 
     def test_get_epic(self, state_manager):
         state_manager.create_epic("epic-001")
@@ -308,7 +300,7 @@ class TestStateManager:
         assert cycle2.cycle_number == 2
 
     def test_add_cycle_epic_not_found(self, state_manager):
-        with pytest.raises(ValueError, match="Epic .* not found"):
+        with pytest.raises(ValueError, match="Issue .* not found"):
             state_manager.add_cycle("nonexistent", 1, "a", "b", "c", "d")
 
     def test_add_cycle_issue_not_found(self, state_manager):
@@ -370,26 +362,39 @@ class TestStateManager:
         with pytest.raises(ValueError, match="Epic .* not found"):
             state_manager.update_epic_status("nonexistent", EpicStatus.FAILED)
 
-    def test_state_persistence_survives_reload(self, tmp_repo):
-        sm1 = StateManager(tmp_repo)
+    def test_state_persistence_survives_reload(self, sprint_db):
+        sm1 = StateManager(sprint_db, sprint_id="test-sprint")
         sm1.create_epic("epic-001")
         sm1.update_issue("epic-001", 42, {"status": IssueStatus.IN_PROGRESS})
 
-        sm2 = StateManager(tmp_repo)
-        state = sm2.load()
-        assert "epic-001" in state
-        assert len(state["epic-001"].issues) == 1
-        assert state["epic-001"].issues[0].issue_number == 42
+        sm2 = StateManager(sprint_db, sprint_id="test-sprint")
+        epic = sm2.get_epic("epic-001")
+        assert epic is not None
+        assert len(epic.issues) == 1
+        assert epic.issues[0].issue_number == 42
 
-    def test_thread_safety(self, state_manager):
-        """Test concurrent access to state manager."""
-        state_manager.create_epic("epic-001")
+    def test_thread_safety(self, tmp_path):
+        """Test concurrent access to state manager (file-based DB for threads)."""
+        from orchestify.db.database import DatabaseManager
+        from orchestify.migrations.runner import MigrationRunner
+
+        db_path = tmp_path / "thread_test.db"
+        db = DatabaseManager(db_path)
+        MigrationRunner(db).run_pending()
+
+        # Create sprint for FK
+        from orchestify.db.models import SprintRow
+        from orchestify.db.repositories import SprintRepository
+        SprintRepository(db).create(SprintRow(sprint_id="test-sprint", status="created"))
+
+        sm = StateManager(db, sprint_id="test-sprint")
+        sm.create_epic("epic-001")
         errors = []
 
         def create_issues(start, count):
             try:
                 for i in range(start, start + count):
-                    state_manager.update_issue("epic-001", i, {"status": IssueStatus.PENDING})
+                    sm.update_issue("epic-001", i, {"status": IssueStatus.PENDING})
             except Exception as e:
                 errors.append(e)
 
@@ -403,6 +408,6 @@ class TestStateManager:
             t.join()
 
         assert len(errors) == 0
-        epic = state_manager.get_epic("epic-001")
+        epic = sm.get_epic("epic-001")
         assert epic is not None
         assert len(epic.issues) == 10

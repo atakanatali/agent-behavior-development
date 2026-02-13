@@ -2,7 +2,6 @@
 import os
 import signal
 import sys
-from pathlib import Path
 from typing import Optional
 
 import click
@@ -10,6 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from orchestify.core.sprint import SprintManager
+from orchestify.cli.commands._db_helper import get_db
 from orchestify.cli.ui.formatting import error, success, warn
 
 console = Console()
@@ -19,12 +19,9 @@ console = Console()
 @click.option("--sprint", "-s", help="Sprint ID to stop (default: active)")
 @click.option("--force", is_flag=True, help="Force stop even if process is unresponsive")
 def stop(sprint: Optional[str], force: bool) -> None:
-    """Stop/pause the current running sprint.
-
-    The sprint state is preserved and can be resumed later.
-    """
-    repo_root = Path.cwd()
-    sprint_manager = SprintManager(repo_root)
+    """Stop/pause the current running sprint."""
+    db = get_db()
+    sprint_manager = SprintManager(db)
 
     if sprint:
         active_sprint = sprint_manager.get(sprint)
@@ -39,7 +36,6 @@ def stop(sprint: Optional[str], force: bool) -> None:
     pid = state.get("pid")
 
     if pid and pid != os.getpid():
-        # Try to signal the running process
         try:
             if force:
                 os.kill(pid, signal.SIGKILL)
@@ -48,12 +44,11 @@ def stop(sprint: Optional[str], force: bool) -> None:
                 os.kill(pid, signal.SIGTERM)
                 console.print(f"Sent stop signal to process {pid}.")
         except ProcessLookupError:
-            pass  # Process already dead
+            pass
         except PermissionError:
             error(f"Permission denied to stop process {pid}.")
             return
 
-    # Update state
     sprint_manager.pause(active_sprint.sprint_id)
     success(f"Sprint {active_sprint.sprint_id} paused.")
     console.print(f"Resume with: [cyan]orchestify resume -s {active_sprint.sprint_id}[/cyan]")
@@ -62,23 +57,15 @@ def stop(sprint: Optional[str], force: bool) -> None:
 @click.command()
 @click.option("--sprint", "-s", help="Sprint ID to resume (default: latest paused)")
 def resume(sprint: Optional[str]) -> None:
-    """Resume a paused sprint.
-
-    Continues from where the sprint was stopped, using saved checkpoints.
-    """
-    repo_root = Path.cwd()
-    sprint_manager = SprintManager(repo_root)
+    """Resume a paused sprint."""
+    db = get_db()
+    sprint_manager = SprintManager(db)
 
     if sprint:
         target_sprint = sprint_manager.get(sprint)
     else:
-        # Find latest paused sprint
-        target_sprint = None
-        for s in reversed(sprint_manager.list_sprints()):
-            state = s.load_state()
-            if state.get("status") == "paused":
-                target_sprint = s
-                break
+        paused = sprint_manager.list_sprints(status="paused")
+        target_sprint = paused[-1] if paused else None
 
     if not target_sprint:
         warn("No paused sprint found to resume.")
@@ -89,7 +76,6 @@ def resume(sprint: Optional[str]) -> None:
         warn(f"Sprint {target_sprint.sprint_id} is not paused (status: {state.get('status')}).")
         return
 
-    # Resume
     sprint_manager.resume(target_sprint.sprint_id)
 
     console.print(Panel(

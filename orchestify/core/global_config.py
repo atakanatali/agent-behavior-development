@@ -1,8 +1,17 @@
 """
 Global configuration manager for orchestify.
 
-Manages user-level config at ~/.config/orchestify/global.yaml.
-Hierarchy: Global -> Project (config/) -> Sprint (.orchestify/[sprint_id]/config.yaml)
+Manages user-level config at ~/.orchestify/config/global.yaml.
+The ~/.orchestify/ directory is the global home for orchestify, containing:
+  - config/         Global settings (global.yaml)
+  - data/           SQLite database (orchestify.db)
+  - personas/       Agent persona definitions
+  - prompts/        Prompt templates
+  - rules/          Behavior rules
+  - skills/         Agent skills
+  - workflows/      Workflow definitions
+
+Hierarchy: Global (~/.orchestify/) -> Project (config/) -> Sprint
 """
 import os
 from pathlib import Path
@@ -10,6 +19,50 @@ from typing import Any, Dict, Optional
 
 import yaml
 
+
+# ── Global Home ──────────────────────────────────────────────────────
+
+def get_orchestify_home() -> Path:
+    """
+    Get the global orchestify home directory.
+
+    Default: ~/.orchestify/
+    Override: ORCHESTIFY_HOME environment variable
+    """
+    env_home = os.environ.get("ORCHESTIFY_HOME")
+    if env_home:
+        return Path(env_home)
+    return Path.home() / ".orchestify"
+
+
+# Standard subdirectories within ~/.orchestify/
+GLOBAL_SUBDIRS = [
+    "config",
+    "data",
+    "artifacts",
+    "personas",
+    "prompts",
+    "rules",
+    "skills",
+    "workflows",
+]
+
+
+def ensure_global_home() -> Path:
+    """
+    Ensure the global ~/.orchestify/ directory exists with all subdirectories.
+
+    Returns:
+        Path to the global home
+    """
+    home = get_orchestify_home()
+    home.mkdir(parents=True, exist_ok=True)
+    for subdir in GLOBAL_SUBDIRS:
+        (home / subdir).mkdir(exist_ok=True)
+    return home
+
+
+# ── Default Config ───────────────────────────────────────────────────
 
 DEFAULT_GLOBAL_CONFIG = {
     "user": {
@@ -33,22 +86,14 @@ DEFAULT_GLOBAL_CONFIG = {
         "max_review_cycles": 3,
         "max_qa_cycles": 3,
     },
-    "memory": {
-        "enabled": False,
-        "backend": "local",
-        "contextify_host": "http://localhost:8080",
-    },
 }
 
 
+# ── Config Paths ─────────────────────────────────────────────────────
+
 def get_global_config_dir() -> Path:
     """Get the global config directory path."""
-    xdg = os.environ.get("XDG_CONFIG_HOME")
-    if xdg:
-        base = Path(xdg)
-    else:
-        base = Path.home() / ".config"
-    return base / "orchestify"
+    return get_orchestify_home() / "config"
 
 
 def get_global_config_path() -> Path:

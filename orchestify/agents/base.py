@@ -229,15 +229,6 @@ class ConcreteAgent(BaseAgent):
             "commands_run": result.commands_run,
         }
 
-        if self.memory_client:
-            try:
-                self.memory_client.store(
-                    key=f"{self.agent_id}:{timestamp}",
-                    value=interaction_log,
-                )
-            except Exception as e:
-                logger.warning(f"Failed to store interaction in memory: {e}")
-
         logger.info(
             f"Agent {self.agent_id} interaction: "
             f"{result.tokens_used} tokens, {result.duration:.2f}s"

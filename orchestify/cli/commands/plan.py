@@ -1,5 +1,6 @@
 """orchestify plan — Interactive TPM planning session."""
 import asyncio
+import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -13,9 +14,50 @@ from rich.markdown import Markdown
 from orchestify.core.sprint import SprintManager
 from orchestify.core.config import load_config
 from orchestify.core.agent_logger import AgentLogger
+from orchestify.core.global_config import get_orchestify_home
+from orchestify.cli.commands._db_helper import get_db
 from orchestify.cli.ui.formatting import error, success, info, warn
 
 console = Console()
+
+
+# Directories to snapshot from global home → sprint dir (agents only, NOT db/config)
+SNAPSHOT_DIRS = ["personas", "prompts", "rules", "skills", "workflows"]
+
+
+def _snapshot_global_to_repo(repo_root: Path) -> int:
+    """
+    Copy agent config files from ~/.orchestify/ to <git-root>/.orchestify/.
+
+    Flat structure — NOT per-sprint. Only copies: personas, prompts, rules, skills, workflows.
+    Does NOT copy: config, data (DB), artifacts, or any global settings.
+
+    Returns:
+        Number of files copied.
+    """
+    global_home = get_orchestify_home()
+    target_dir = repo_root / ".orchestify"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    copied = 0
+
+    for dirname in SNAPSHOT_DIRS:
+        src = global_home / dirname
+        dst = target_dir / dirname
+
+        if not src.exists():
+            continue
+
+        # Remove existing snapshot dir to get a clean copy
+        if dst.exists():
+            shutil.rmtree(dst)
+
+        # Only copy if source has content
+        has_files = any(src.iterdir()) if src.is_dir() else False
+        if has_files:
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+            copied += sum(1 for _ in dst.rglob("*") if _.is_file())
+
+    return copied
 
 
 @click.command()
@@ -36,7 +78,8 @@ def plan(sprint: Optional[str], prompt: Optional[str], non_interactive: bool) ->
         sys.exit(1)
 
     # Find sprint
-    sprint_manager = SprintManager(repo_root)
+    db = get_db()
+    sprint_manager = SprintManager(db)
 
     if sprint:
         active_sprint = sprint_manager.get(sprint)
@@ -48,6 +91,11 @@ def plan(sprint: Optional[str], prompt: Optional[str], non_interactive: bool) ->
         if not active_sprint:
             error("No sprint found. Run [cyan]orchestify init[/cyan] first.")
             sys.exit(1)
+
+    # Snapshot agent config from global home → git root .orchestify/ (flat)
+    copied = _snapshot_global_to_repo(repo_root)
+    if copied > 0:
+        info(f"  Snapshot: {copied} agent files copied from global home.")
 
     # Load config
     try:
@@ -79,7 +127,7 @@ def plan(sprint: Optional[str], prompt: Optional[str], non_interactive: bool) ->
     active_sprint.save_state(state)
 
     # Initialize logger
-    agent_logger = AgentLogger(active_sprint.log_dir)
+    agent_logger = AgentLogger(db, sprint_id=active_sprint.sprint_id)
 
     console.print()
     console.print(Panel(
@@ -129,12 +177,11 @@ async def _run_tpm_session(config, sprint, prompt, logger, non_interactive):
     from orchestify.core.engine import OrchestrifyEngine
     from orchestify.core.state import StateManager
 
-    state_manager = StateManager(sprint.sprint_dir)
+    state_manager = StateManager(sprint._db, sprint_id=sprint.sprint_id)
     engine = OrchestrifyEngine(
         config={"max_self_fixes": 3},
         state_manager=state_manager,
         provider_registry={},
-        memory_client=None,
     )
 
     result = await engine.run_phase("tpm", input_text=prompt)
@@ -185,6 +232,7 @@ def _generate_mock_plan(sprint, prompt, logger):
 """
 
     # Save plan to sprint artifacts
+    sprint.artifacts_dir.mkdir(parents=True, exist_ok=True)
     plan_file = sprint.artifacts_dir / "plan.md"
     plan_file.write_text(plan_text)
 

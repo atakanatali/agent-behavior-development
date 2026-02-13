@@ -16,6 +16,7 @@ from orchestify.core.sprint import SprintManager
 from orchestify.core.config import load_config
 from orchestify.core.state import StateManager, EpicStatus, IssueStatus
 from orchestify.core.agent_logger import AgentLogger
+from orchestify.cli.commands._db_helper import get_db
 from orchestify.cli.ui.formatting import error, success, info, warn
 from orchestify.cli.ui.streaming import PipelineDisplay
 
@@ -42,7 +43,8 @@ def start(sprint: Optional[str], phase: Optional[str], issue: Optional[int], dry
         sys.exit(1)
 
     # Find sprint
-    sprint_manager = SprintManager(repo_root)
+    db = get_db()
+    sprint_manager = SprintManager(db)
 
     if sprint:
         active_sprint = sprint_manager.get(sprint)
@@ -98,7 +100,7 @@ def start(sprint: Optional[str], phase: Optional[str], issue: Optional[int], dry
     active_sprint.save_state(state)
 
     # Initialize logger
-    agent_logger = AgentLogger(active_sprint.log_dir)
+    agent_logger = AgentLogger(db, sprint_id=active_sprint.sprint_id)
     agent_logger.log("pipeline", "pipeline_started", {
         "sprint_id": active_sprint.sprint_id,
         "phase": phase,
@@ -127,7 +129,9 @@ async def _run_pipeline(config, sprint, logger, display, start_phase, target_iss
     """Run the full pipeline with live display."""
     from orchestify.core.engine import OrchestrifyEngine
 
-    state_manager = StateManager(sprint.sprint_dir)
+    # Get DB from the sprint's internal reference
+    db = sprint._db
+    state_manager = StateManager(db, sprint_id=sprint.sprint_id)
 
     engine = OrchestrifyEngine(
         config={
@@ -135,7 +139,6 @@ async def _run_pipeline(config, sprint, logger, display, start_phase, target_iss
         },
         state_manager=state_manager,
         provider_registry={},
-        memory_client=None,
     )
 
     # Show live display

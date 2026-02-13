@@ -27,19 +27,48 @@ from orchestify.core.agent import (
 
 
 @pytest.fixture
+def test_db():
+    """Create an in-memory database with migrations applied.
+
+    NOTE: Does NOT create a default sprint. Tests that need FK-valid
+    sprint_id should use the `sprint_db` or `state_manager` fixture,
+    or call `_ensure_sprint(db)` themselves.
+    """
+    from orchestify.db.database import DatabaseManager
+    from orchestify.migrations.runner import MigrationRunner
+    db = DatabaseManager(":memory:")
+    MigrationRunner(db).run_pending()
+    return db
+
+
+def _ensure_sprint(db, sprint_id="test-sprint"):
+    """Helper to ensure a sprint exists in the DB for FK constraints."""
+    from orchestify.db.repositories import SprintRepository
+    repo = SprintRepository(db)
+    if not repo.get(sprint_id):
+        from orchestify.db.models import SprintRow
+        repo.create(SprintRow(sprint_id=sprint_id, status="created"))
+
+
+@pytest.fixture
+def sprint_db(test_db):
+    """Test DB with a default 'test-sprint' already created."""
+    _ensure_sprint(test_db)
+    return test_db
+
+
+@pytest.fixture
 def tmp_repo(tmp_path):
-    """Create a temporary repository root with .orchestify directory."""
+    """Create a temporary repository root."""
     repo = tmp_path / "test-repo"
     repo.mkdir()
-    orchestify_dir = repo / ".orchestify"
-    orchestify_dir.mkdir()
     return repo
 
 
 @pytest.fixture
-def state_manager(tmp_repo):
-    """Create a StateManager with a temporary repo root."""
-    return StateManager(tmp_repo)
+def state_manager(sprint_db):
+    """Create a StateManager with an in-memory DB (sprint pre-created)."""
+    return StateManager(sprint_db, sprint_id="test-sprint")
 
 
 @pytest.fixture
@@ -110,7 +139,6 @@ def config_dir(tmp_path):
     config = tmp_path / "config"
     config.mkdir()
 
-    # orchestify.yaml
     (config / "orchestify.yaml").write_text("""
 project:
   name: "Test Project"
@@ -143,7 +171,6 @@ dev_loop:
   timeout_per_command: 120
 """)
 
-    # agents.yaml
     (config / "agents.yaml").write_text("""
 agents:
   tpm:
@@ -162,7 +189,6 @@ agents:
     max_tokens: 8192
 """)
 
-    # providers.yaml
     (config / "providers.yaml").write_text("""
 providers:
   anthropic:
@@ -171,8 +197,5 @@ providers:
     default_model: claude-opus-4-6
     max_tokens: 8192
 """)
-
-    # memory.yaml - omitted to use defaults since load_config's
-    # memory extraction logic expects a specific format
 
     return config
