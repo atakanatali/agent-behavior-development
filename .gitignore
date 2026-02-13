@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Orchestify runtime data
+.orchestify/*/logs/
+.orchestify/*/artifacts/
+.orchestify/*/state.json
+.orchestify/logs/

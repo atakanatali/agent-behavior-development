@@ -1,272 +1,189 @@
-# ABD Orchestration Engine - Complete Implementation
+# Orchestify — Agent Behavior Development (ABD) Engine
 
-This directory contains a production-grade orchestration engine for the Agent Behavior Development (ABD) framework. The engine manages multi-agent workflows with state persistence, output validation, and comprehensive logging.
+Multi-agent orchestration engine for software development using the **behavior-over-code** paradigm.
 
-## What's Included
+## What is ABD?
 
-### Core Modules (orchestify/core/)
+Agent Behavior Development (ABD) shifts the focus from writing code to defining behaviors. Instead of coding line by line, you describe *what* agents should do — and the orchestration engine handles the *how*.
 
-1. **state.py** (379 lines)
-   - Thread-safe state management with RLock
-   - Persistence to `.orchestify/state.json`
-   - Models: EpicState, IssueState, CycleState
-   - StateManager API for all state operations
-
-2. **agent.py** (369 lines)
-   - BaseAgent abstract class for all agents
-   - Data models: AgentContext, AgentResult, Scorecard, RecycleOutput
-   - ABD scorecard system (5 dimensions, auto-interpretation)
-   - LLM message building and validation
-
-3. **engine.py** (554 lines)
-   - OrchestrifyEngine orchestration system
-   - Full pipeline: TPM → Architect → Issues → Complete
-   - Phase-based execution with state tracking
-   - Automatic escalation and error handling
-
-### Utility Modules (orchestify/utils/)
-
-4. **logger.py** (111 lines)
-   - Structured logging with Rich formatting
-   - File and console handlers
-   - Global logger cache
-
-5. **retry.py** (318 lines)
-   - Decorators: @retry_llm_call, @retry_github_call, @with_retries
-   - Exponential backoff with configurable parameters
-   - Sync and async support
-
-6. **validators.py** (340 lines)
-   - Output validation functions
-   - Evidence and actionability checking
-   - Scorecard consistency validation
-   - Detailed error reporting
+The ABD manifesto emphasizes behavior fidelity, scope control, evidence-based decisions, and continuous recycling of knowledge through a scorecard system.
 
 ## Quick Start
 
-### 1. Create Custom Agents
+```bash
+# Install
+pip install agent-behavior-development
 
-```python
-from orchestify.core import BaseAgent, AgentContext, AgentResult, Scorecard
+# Global setup (one-time)
+orchestify install
 
-class EngineerAgent(BaseAgent):
-    async def execute(self, context: AgentContext) -> AgentResult:
-        messages = self._build_messages(context)
-        output, tokens = await self._call_llm(messages)
-        return AgentResult(output=output, tokens_used=tokens)
-    
-    def score(self, result: AgentResult) -> Scorecard:
-        return Scorecard(
-            scope_control=2,
-            behavior_fidelity=2,
-            evidence_orientation=1,
-            actionability=2,
-            risk_awareness=1
-        )
+# Initialize a sprint in your git repo
+cd your-project
+orchestify init -p "Build user authentication with JWT"
+
+# Plan with TPM agent
+orchestify plan
+
+# Run the pipeline
+orchestify start
+
+# Check progress
+orchestify status
+orchestify inspect
 ```
 
-### 2. Initialize and Run
+## Architecture
 
-```python
-from orchestify.core import StateManager, OrchestrifyEngine
-from pathlib import Path
-
-state_manager = StateManager(Path("/path/to/repo"))
-engine = OrchestrifyEngine(
-    config={},
-    state_manager=state_manager,
-    provider_registry={"openai": provider},
-)
-
-# Register agents
-engine.register_agent("engineer", engineer_agent)
-engine.register_agent("reviewer", reviewer_agent)
-# ... register all agents
-
-# Run pipeline
-result = await engine.run_full_pipeline(prompt="Your task")
-```
-
-### 3. Monitor State
-
-State is persisted to `.orchestify/state.json`:
-
-```python
-from orchestify.core import StateManager
-
-state_manager = StateManager(Path("/path/to/repo"))
-state = state_manager.load()
-
-for epic_id, epic in state.items():
-    print(f"Epic {epic_id}: {epic.status}")
-    for issue in epic.issues:
-        print(f"  Issue #{issue.issue_number}: {issue.status}")
-```
-
-## Key Features
-
-- **Thread-Safe State**: All state changes use RLock for concurrent access
-- **Automatic Persistence**: Changes saved immediately to `.orchestify/state.json`
-- **Type Hints**: Full type annotations throughout
-- **Async Ready**: Engine and agents support async/await
-- **ABD Compliance**: Built-in scorecard and evidence validation
-- **Error Handling**: Automatic retry with exponential backoff
-- **Logging**: Structured logging with Rich console formatting
-- **Extensible**: Easy to implement custom agents and validators
-
-## File Structure
+Orchestify runs a multi-phase pipeline for each sprint:
 
 ```
-orchestify/
-├── __init__.py
-├── core/
-│   ├── __init__.py           # Exports
-│   ├── state.py              # State persistence
-│   ├── agent.py              # Base agent + models
-│   └── engine.py             # Main orchestrator
-└── utils/
-    ├── __init__.py
-    ├── logger.py             # Structured logging
-    ├── retry.py              # Retry decorators
-    └── validators.py         # Output validation
+TPM → Architect → Engineer → Reviewer → QA → Complete
 ```
 
-## Documentation Files
+Each phase is handled by a specialized agent with defined behavior specs. The scorecard system evaluates agent output across five dimensions: scope control, behavior fidelity, evidence orientation, actionability, and risk awareness.
 
-- **MANIFEST.md**: Quick reference for all classes and methods
-- **CODE_EXAMPLES.md**: Usage patterns and examples
-- **IMPLEMENTATION_GUIDE.md**: Detailed architecture and configuration
-- **README.md**: This file
+### Sprint-Based Sessions
 
-## Pipeline Architecture
+Each execution runs inside an isolated sprint context stored in `.orchestify/<sprint_id>/`. Multiple sprints can run in parallel from different terminals.
 
 ```
-TPM Agent
-  ↓
-Architect Agent (planning)
-  ↓
-Issue Loop (for each issue):
-  ├─ Engineer Agent (implementation)
-  ├─ Reviewer Agent (code review, max 3 cycles)
-  ├─ QA Agent (testing, max 3 cycles)
-  └─ Architect Agent (final review & merge)
-  ↓
-Complete (finalize epic)
+.orchestify/
+├── swift-core-4821/         # Sprint 1
+│   ├── config.yaml
+│   ├── state.json
+│   ├── logs/
+│   │   ├── tpm.log
+│   │   ├── engineer.log
+│   │   └── engineer_task.yaml
+│   ├── artifacts/
+│   ├── personas/
+│   ├── rules/
+│   └── prompts/
+└── bold-apex-1337/          # Sprint 2 (parallel)
+    └── ...
 ```
 
-## State Management
+## CLI Commands
 
-### State Hierarchy
-- **EpicState**: Contains epic metadata and list of issues
-- **IssueState**: Contains issue metadata, PR info, and cycle history
-- **CycleState**: Records individual workflow transitions
-
-### Automatic Tracking
-- Epic creation/status changes
-- Issue status transitions
-- Cycle history with timestamps
-- Scorecard evaluations
-- Recycle outputs
-
-## Validation Framework
-
-The engine includes validators for:
-- Issue format compliance
-- PR description quality
-- Code review completeness
-- Scorecard consistency
-- Evidence presence
-- Actionability
+| Command | Description |
+|---------|------------|
+| `orchestify` | Show welcome screen |
+| `orchestify install` | Global setup wizard |
+| `orchestify init` | Initialize sprint in git repo |
+| `orchestify plan` | Interactive TPM planning session |
+| `orchestify start` | Run orchestration pipeline |
+| `orchestify status` | View sprint status |
+| `orchestify inspect` | View agent activity/logs |
+| `orchestify memory` | Manage Contextify memory |
+| `orchestify config` | Configuration management |
+| `orchestify stop` | Pause running sprint |
+| `orchestify resume` | Resume paused sprint |
 
 ## Configuration
 
-### StateManager Options
-- `repo_root`: Target repository path
-- Outputs: `.orchestify/state.json`, `.orchestify/logs/`
+Three-tier configuration hierarchy:
 
-### OrchestrifyEngine Options
-- `max_retries`: LLM call retries (default: 3)
-- `max_self_fixes`: Engineer self-fix attempts (default: 3)
-- `max_tokens`: LLM response limit (default: 4096)
-- Review/QA cycles: Max 3 each per issue
+1. **Global** (`~/.config/orchestify/global.yaml`) — User preferences, API keys, defaults
+2. **Project** (`config/`) — Project-specific settings, agent configs, provider setup
+3. **Sprint** (`.orchestify/<sprint_id>/config.yaml`) — Sprint-level overrides
 
-## Dependencies
+### Agent Configuration
 
-**Required:**
-- Python 3.8+
-- Standard library: asyncio, json, threading, logging, pathlib, dataclasses
+```yaml
+# config/agents.yaml
+agents:
+  tpm:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.7
+    thinking: true
+    mode: interactive
+  engineer:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.5
+    mode: autonomous
+```
 
-**Optional:**
-- tenacity (advanced retry handling)
-- rich (enhanced console output)
+### Provider Configuration
 
-## Testing
+```yaml
+# config/providers.yaml
+providers:
+  anthropic:
+    type: anthropic
+    api_key: ${ANTHROPIC_API_KEY}
+    default_model: claude-opus-4-6
+```
 
-All modules compile successfully with full type checking:
+## Agent Roles
+
+Orchestify includes 11 specialized agent roles:
+
+- **TPM (Task Planning Model)** — Breaks goals into epics and issues
+- **Architect** — Designs system architecture and technical approach
+- **Engineer** — Implements code changes with self-fix loop
+- **Reviewer** — Reviews code quality and behavior compliance
+- **QA** — Validates through testing and integration checks
+- **Validator** — Schema and contract validation
+- **Debugger** — Root cause analysis
+- **Documenter** — Documentation generation
+- **Synthesizer** — Cross-agent knowledge synthesis
+- **Scorecardist** — Evaluates agent output quality
+- **Recycler** — Extracts reusable patterns from completed work
+
+## Scorecard System
+
+Every agent output is scored across five dimensions (0-2 each):
+
+| Dimension | 0 | 1 | 2 |
+|-----------|---|---|---|
+| Scope Control | Off-scope | Partial | On-scope |
+| Behavior Fidelity | Deviated | Partial | Faithful |
+| Evidence Orientation | No evidence | Some evidence | Well-evidenced |
+| Actionability | Vague | Partial | Actionable |
+| Risk Awareness | Ignored | Acknowledged | Mitigated |
+
+**Interpretation**: 8-10 = Promote, 5-7 = Recycle, 0-4 = Anti-pattern
+
+## Memory Integration
+
+Orchestify supports Contextify for persistent agent memory across three layers:
+
+- **Agent layer** — Individual agent context
+- **Epic layer** — Shared within an epic
+- **Global layer** — Cross-project knowledge
+
+Fallback to local JSON storage when Contextify is not available.
+
+## Development
 
 ```bash
-python3 -m py_compile orchestify/core/state.py
-python3 -m py_compile orchestify/core/agent.py
-python3 -m py_compile orchestify/core/engine.py
-python3 -m py_compile orchestify/utils/*.py
+# Clone
+git clone https://github.com/atakanatali/agent-behavior-development.git
+cd agent-behavior-development
+
+# Install dev dependencies
+pip install -e ".[dev]" --break-system-packages
+
+# Run tests
+pytest
+
+# Run with coverage
+pytest --cov=orchestify --cov-report=term-missing
 ```
 
-Verify imports:
+## Requirements
 
-```python
-from orchestify.core import (
-    StateManager, EpicState, IssueState,
-    BaseAgent, AgentContext, AgentResult, Scorecard,
-    OrchestrifyEngine
-)
-from orchestify.utils import get_logger
-from orchestify.utils.validators import validate_evidence
-```
+- Python 3.11+
+- Git repository (for `orchestify init`)
+- GitHub CLI (`gh`) — optional, for PR management
+- LLM API key (Anthropic, OpenAI, or LiteLLM compatible)
 
-## Usage Examples
+## License
 
-See **CODE_EXAMPLES.md** for:
-1. State management patterns
-2. Custom agent implementation
-3. Pipeline execution
-4. Output validation
-5. Logging and monitoring
-6. Retry handling
-7. State resumption
-8. Advanced patterns
+MIT
 
-## Implementation Checklist
+## Author
 
-- [ ] Create agent implementations
-- [ ] Create `prompts/personas/{agent_id}.md` files
-- [ ] Create `prompts/guardrails.md`
-- [ ] Initialize StateManager
-- [ ] Initialize OrchestrifyEngine
-- [ ] Register all agents
-- [ ] Implement custom scoring logic
-- [ ] Implement custom recycle strategies
-- [ ] Test validation functions
-- [ ] Monitor `.orchestify/logs/orchestify.log`
-
-## Total Statistics
-
-- **7 Python modules**: 2,454 lines of code
-- **Full type hints**: Every function and class
-- **Comprehensive docstrings**: All public APIs
-- **Production quality**: Error handling, logging, state management
-- **Async ready**: All major operations support async/await
-- **Thread-safe**: RLock on all state operations
-
-## Next Steps
-
-1. Implement specific agents for your use case
-2. Define persona prompts and guardrails
-3. Configure LLM provider
-4. Run pipeline with test cases
-5. Monitor and iterate based on scorecard results
-
-For detailed information, see:
-- Implementation details: `IMPLEMENTATION_GUIDE.md`
-- Code examples: `CODE_EXAMPLES.md`
-- API reference: `MANIFEST.md`
-
+Atakan Atali (atakanatali6@gmail.com)
