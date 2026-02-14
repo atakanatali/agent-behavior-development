@@ -1,0 +1,88 @@
+agents:
+  executor:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.7
+    thinking: false
+    mode: autonomous
+    max_tokens: 8192
+
+  reviewer:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.5
+    thinking: false
+    mode: autonomous
+    max_tokens: 4096
+
+  qa:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.7
+    thinking: false
+    mode: autonomous
+    max_tokens: 4096
+
+  planner:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.5
+    thinking: true
+    mode: autonomous
+    max_tokens: 8192
+
+  architect:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.6
+    thinking: true
+    mode: autonomous
+    max_tokens: 8192
+
+  validator:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.3
+    thinking: false
+    mode: autonomous
+    max_tokens: 4096
+
+  documenter:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.5
+    thinking: false
+    mode: autonomous
+    max_tokens: 4096
+
+  debugger:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.7
+    thinking: true
+    mode: autonomous
+    max_tokens: 8192
+
+  synthesizer:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.6
+    thinking: true
+    mode: autonomous
+    max_tokens: 8192
+
+  scorecardist:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.3
+    thinking: false
+    mode: autonomous
+    max_tokens: 2048
+
+  recycler:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.6
+    thinking: true
+    mode: autonomous
+    max_tokens: 8192

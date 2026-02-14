@@ -1,213 +1,189 @@
-# Agent Behavior Development (ABD)
+# Orchestify — Agent Behavior Development (ABD) Engine
 
-Agent Behavior Development (ABD) is a software development paradigm that treats
-**agent behavior** as the primary engineering artifact.
+Multi-agent orchestration engine for software development using the **behavior-over-code** paradigm.
 
-In ABD:
-- Code is not the first-class citizen.
-- Prompts, guardrails, output formats, review rules, and recycle loops are.
+## What is ABD?
 
-This repository does not provide tools.
-It defines a **development paradigm**, not an SDK.
+Agent Behavior Development (ABD) shifts the focus from writing code to defining behaviors. Instead of coding line by line, you describe *what* agents should do — and the orchestration engine handles the *how*.
 
----
+The ABD manifesto emphasizes behavior fidelity, scope control, evidence-based decisions, and continuous recycling of knowledge through a scorecard system.
 
-## One-Sentence Definition
+## Quick Start
 
-> **Agent Behavior Development (ABD)** is a paradigm where humans design and evolve the behavior of agents, and code is a byproduct validated by evidence.
+```bash
+# Install
+pip install agent-behavior-development
 
----
+# Global setup (one-time)
+orchestify install
 
-```mermaid
-graph TB
+# Initialize a sprint in your git repo
+cd your-project
+orchestify init -p "Build user authentication with JWT"
 
-  subgraph Planning
-    A[Product Intent or Sprint Goal]
-    B[Notlanot Sprint Plan with Personas]
-    C[Task Packets]
-    D[Conflict Inputs]
-    E[Conflict Scoring and Replan]
-  end
+# Plan with TPM agent
+orchestify plan
 
-  subgraph PromptOps
-    F[Prompt Library]
-    G[Prompt Compiler]
-    H[Guardrails]
-    I[Output Format Contract]
-  end
+# Run the pipeline
+orchestify start
 
-  subgraph Execution
-    J[Agent Run]
-    K[Structured Output]
-    L[Evidence Production]
-  end
-
-  subgraph ReviewRecycle
-    M[Scorecard]
-    N[Tags and Anti Patterns]
-    O[Prompt Patch Rules]
-    P[Promote to Library]
-    Q[Recycle Outputs]
-    R[Changelog and Governance]
-  end
-
-  A --> B
-  B --> C
-  C --> D
-  D --> E
-
-  E --> G
-  F --> G
-  G --> H
-  H --> I
-  I --> J
-
-  J --> K
-  K --> L
-  K --> M
-  L --> M
-
-  M --> N
-  N --> O
-  O --> J
-  O --> P
-  P --> F
-
-  M --> Q
-  Q --> R
-  R --> B
-
-  style F fill:#9C27B0,color:#fff
-  style M fill:#FF9800,color:#fff
-  style O fill:#F44336,color:#fff
-  style L fill:#4CAF50,color:#fff
-  style I fill:#1565C0,color:#fff
+# Check progress
+orchestify status
+orchestify inspect
 ```
 
----
+## Architecture
 
-## Why ABD Exists
+Orchestify runs a multi-phase pipeline for each sprint:
 
-Traditional development paradigms assume:
-- Humans write specifications.
-- Humans write tests.
-- Humans write most of the code.
-- Tools assist.
+```
+TPM → Architect → Engineer → Reviewer → QA → Complete
+```
 
-That assumption no longer holds.
+Each phase is handled by a specialized agent with defined behavior specs. The scorecard system evaluates agent output across five dimensions: scope control, behavior fidelity, evidence orientation, actionability, and risk awareness.
 
-Modern agents:
-- Propose behaviors
-- Generate test strategies
-- Produce implementation drafts
+### Sprint-Based Sessions
 
-Yet teams still:
-- Debug code instead of behavior
-- Retry prompts instead of fixing agent constraints
-- Treat prompt failures as one-off accidents
+Each execution runs inside an isolated sprint context stored in `.orchestify/<sprint_id>/`. Multiple sprints can run in parallel from different terminals.
 
-ABD exists to systematize agent behavior improvement.
+```
+.orchestify/
+├── swift-core-4821/         # Sprint 1
+│   ├── config.yaml
+│   ├── state.json
+│   ├── logs/
+│   │   ├── tpm.log
+│   │   ├── engineer.log
+│   │   └── engineer_task.yaml
+│   ├── artifacts/
+│   ├── personas/
+│   ├── rules/
+│   └── prompts/
+└── bold-apex-1337/          # Sprint 2 (parallel)
+    └── ...
+```
 
----
+## CLI Commands
 
-## The Core Shift: Code → Behavior
+| Command | Description |
+|---------|------------|
+| `orchestify` | Show welcome screen |
+| `orchestify install` | Global setup wizard |
+| `orchestify init` | Initialize sprint in git repo |
+| `orchestify plan` | Interactive TPM planning session |
+| `orchestify start` | Run orchestration pipeline |
+| `orchestify status` | View sprint status |
+| `orchestify inspect` | View agent activity/logs |
+| `orchestify memory` | Manage Contextify memory |
+| `orchestify config` | Configuration management |
+| `orchestify stop` | Pause running sprint |
+| `orchestify resume` | Resume paused sprint |
 
-The defining shift of ABD is simple:
+## Configuration
 
-> **The primary refactoring target is agent behavior, not code.**
+Three-tier configuration hierarchy:
 
-In ABD, when output quality is poor:
-1) Fix the prompt
-2) Tighten guardrails
-3) Lock output formats
-4) Improve review rules
-5) Strengthen recycle logic  
-**Only then** adjust code.
+1. **Global** (`~/.config/orchestify/global.yaml`) — User preferences, API keys, defaults
+2. **Project** (`config/`) — Project-specific settings, agent configs, provider setup
+3. **Sprint** (`.orchestify/<sprint_id>/config.yaml`) — Sprint-level overrides
 
----
+### Agent Configuration
 
-## What ABD Is
+```yaml
+# config/agents.yaml
+agents:
+  tpm:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.7
+    thinking: true
+    mode: interactive
+  engineer:
+    provider: anthropic
+    model: claude-opus-4-6
+    temperature: 0.5
+    mode: autonomous
+```
 
-ABD is:
-- Agent-first, not agent-autonomous
-- Behavior-driven, not prompt-driven
-- Evidence-oriented, not test-obsessed
-- Governance-heavy, not “just try again”
+### Provider Configuration
 
-ABD introduces:
-- Prompt-as-artifact discipline
-- Behavior scorecards
-- Mandatory recycle outputs
-- Conflict-aware task planning
-- Agent behavior retrospectives
+```yaml
+# config/providers.yaml
+providers:
+  anthropic:
+    type: anthropic
+    api_key: ${ANTHROPIC_API_KEY}
+    default_model: claude-opus-4-6
+```
 
----
+## Agent Roles
 
-## What ABD Is Not
+Orchestify includes 11 specialized agent roles:
 
-ABD is NOT:
-- AI-assisted TDD
-- BDD automation
-- “Let the agent do everything”
-- Prompt engineering tips
-- A replacement for Scrum
+- **TPM (Task Planning Model)** — Breaks goals into epics and issues
+- **Architect** — Designs system architecture and technical approach
+- **Engineer** — Implements code changes with self-fix loop
+- **Reviewer** — Reviews code quality and behavior compliance
+- **QA** — Validates through testing and integration checks
+- **Validator** — Schema and contract validation
+- **Debugger** — Root cause analysis
+- **Documenter** — Documentation generation
+- **Synthesizer** — Cross-agent knowledge synthesis
+- **Scorecardist** — Evaluates agent output quality
+- **Recycler** — Extracts reusable patterns from completed work
 
-ABD complements Scrum by adding an **agent behavior governance layer**.
+## Scorecard System
 
----
+Every agent output is scored across five dimensions (0-2 each):
 
-## ABD vs TDD vs BDD
+| Dimension | 0 | 1 | 2 |
+|-----------|---|---|---|
+| Scope Control | Off-scope | Partial | On-scope |
+| Behavior Fidelity | Deviated | Partial | Faithful |
+| Evidence Orientation | No evidence | Some evidence | Well-evidenced |
+| Actionability | Vague | Partial | Actionable |
+| Risk Awareness | Ignored | Acknowledged | Mitigated |
 
-| Aspect | TDD | BDD | ABD |
-|-----|-----|-----|-----|
-| Who defines behavior | Human | Human | Agent (under rules) |
-| Primary artifact | Test | Scenario | Prompt + Guardrails |
-| What is refactored | Code | Code | Agent behavior |
-| Failure resolution | Rewrite code | Rewrite scenario | Patch prompt/flow |
-| Evidence | Tests | Scenarios | Tests, checks, demos |
-| Paradigm focus | Code correctness | Business behavior | Behavior production system |
+**Interpretation**: 8-10 = Promote, 5-7 = Recycle, 0-4 = Anti-pattern
 
-TDD and BDD are **techniques** in ABD, not paradigms.
+## Memory Integration
 
----
+Orchestify supports Contextify for persistent agent memory across three layers:
 
-## Non-Negotiable Rules (v1)
+- **Agent layer** — Individual agent context
+- **Epic layer** — Shared within an epic
+- **Global layer** — Cross-project knowledge
 
-1) Agent output must follow a fixed format.
-2) Evidence must be proposed before implementation.
-3) Assumptions must be explicit.
-4) Agents may ask up to 3 questions and must stop.
-5) Every task must produce recycle outputs.
-6) Behavior changes must be versioned.
+Fallback to local JSON storage when Contextify is not available.
 
----
+## Development
 
-## Repository Map
+```bash
+# Clone
+git clone https://github.com/atakanatali/agent-behavior-development.git
+cd agent-behavior-development
 
-- `MANIFESTO.md` → Hard rules of the paradigm
-- `0_introduction/` → What ABD is and is not
-- `1_core/` → Principles and artifacts
-- `2_process/` → Lifecycle, sprint and task models
-- `3_promptops/` → Prompt operations and metrics
-- `4_templates/` → Ready-to-use templates
-- `5_examples/` → End-to-end worked examples
+# Install dev dependencies
+pip install -e ".[dev]" --break-system-packages
 
----
+# Run tests
+pytest
 
-## First-Week Adoption Guide
+# Run with coverage
+pytest --cov=orchestify --cov-report=term-missing
+```
 
-Day 1:
-- Read MANIFESTO
-- Use the core prompt template for one task
-- Score the output
+## Requirements
 
-Day 2–3:
-- Run 3 more tasks
-- Tag recurring failures
+- Python 3.11+
+- Git repository (for `orchestify init`)
+- GitHub CLI (`gh`) — optional, for PR management
+- LLM API key (Anthropic, OpenAI, or LiteLLM compatible)
 
-Day 4:
-- Patch the prompt
-- Document behavior improvement
+## License
 
-Day 5:
-- Sprint review focused on agent behavior, not features
+MIT
+
+## Author
+
+Atakan Atali (atakanatali6@gmail.com)

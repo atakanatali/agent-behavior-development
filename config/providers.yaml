@@ -1,0 +1,7 @@
+providers:
+  anthropic:
+    type: anthropic
+    api_key: ${ANTHROPIC_API_KEY}
+    default_model: claude-opus-4-6
+    max_tokens: 8192
+    base_url: null

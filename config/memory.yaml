@@ -1,0 +1,18 @@
+contextify:
+  enabled: false
+  host: "http://localhost:8080"
+  protocol: "http"
+  layers:
+    agent:
+      ttl: null
+      max_entries: 1000
+    epic:
+      ttl: null
+      max_entries: 1000
+    global:
+      ttl: null
+      max_entries: 1000
+
+fallback:
+  type: "local_json"
+  path: ".orchestify/memory/"
